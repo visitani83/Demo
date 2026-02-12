@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Expense Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+    --text: #f1f5f9; --muted: #94a3b8; --accent: #38bdf8;
+    --green: #4ade80; --red: #f87171; --yellow: #facc15;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── Nav ── */
+  nav { background: var(--surface); border-bottom: 1px solid var(--surface2); padding: 16px 32px; display: flex; align-items: center; gap: 24px; }
+  nav h1 { font-size: 1.3rem; font-weight: 700; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 0.95rem; transition: color 0.2s; }
+  nav a:hover, nav a.active { color: var(--accent); }
+
+  /* ── Layout ── */
+  .container { max-width: 1280px; margin: 0 auto; padding: 24px; }
+  .grid { display: grid; gap: 24px; }
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  /* ── Cards ── */
+  .card { background: var(--surface); border-radius: var(--radius); padding: 24px; border: 1px solid var(--surface2); }
+  .card h2 { font-size: 1rem; color: var(--muted); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  /* ── Stat cards ── */
+  .stat { text-align: center; padding: 20px; }
+  .stat .value { font-size: 2rem; font-weight: 700; }
+  .stat .label { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-size: 0.8rem; text-transform: uppercase; padding: 8px 12px; border-bottom: 1px solid var(--surface2); }
+  td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.9rem; }
+  tr:hover td { background: rgba(56,189,248,0.05); }
+  .amount { font-weight: 600; color: var(--green); }
+  .cat-badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 0.78rem; background: var(--surface2); }
+
+  /* ── Buttons ── */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 500; transition: all 0.2s; }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-danger { background: transparent; color: var(--red); border: 1px solid var(--red); padding: 4px 10px; font-size: 0.75rem; }
+  .btn-danger:hover { background: var(--red); color: white; }
+  .btn-outline { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .btn-outline:hover { background: var(--accent); color: var(--bg); }
+
+  /* ── Forms ── */
+  select, input[type="text"], input[type="number"], input[type="date"] {
+    background: var(--surface2); color: var(--text); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; outline: none;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+
+  /* ── Flash messages ── */
+  .flash { padding: 12px 20px; border-radius: 8px; margin-bottom: 16px; font-size: 0.9rem; }
+  .flash-success { background: rgba(74,222,128,0.15); border: 1px solid var(--green); color: var(--green); }
+  .flash-error { background: rgba(248,113,113,0.15); border: 1px solid var(--red); color: var(--red); }
+
+  /* ── Add expense form ── */
+  .add-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+  .add-row .field { display: flex; flex-direction: column; gap: 4px; }
+  .add-row label { font-size: 0.75rem; color: var(--muted); }
+
+  /* ── Filter ── */
+  .filter-row { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; }
+  .filter-row label { color: var(--muted); font-size: 0.85rem; }
+
+  /* ── Chart containers ── */
+  .chart-wrap { position: relative; width: 100%; max-height: 320px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <h1>Expense Tracker</h1>
+  <a href="/" class="active">Dashboard</a>
+  <a href="/upload">Upload Receipt</a>
+</nav>
+
+<div class="container">
+
+  <!-- Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for cat, msg in messages %}
+    <div class="flash flash-{{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  <!-- ── Stats Row ── -->
+  <div class="grid grid-3" style="margin-bottom:24px">
+    <div class="card stat">
+      <div class="value">${{ "%.2f"|format(total) }}</div>
+      <div class="label">{{ "Filtered" if month_filter else "All Time" }} Total</div>
+    </div>
+    <div class="card stat">
+      <div class="value">{{ expenses|length }}</div>
+      <div class="label">Expenses</div>
+    </div>
+    <div class="card stat">
+      <div class="value">{{ categories|length }}</div>
+      <div class="label">Categories</div>
+    </div>
+  </div>
+
+  <!-- ── Month Filter ── -->
+  <div class="filter-row">
+    <label>Filter by month:</label>
+    <select onchange="window.location='/?month='+this.value">
+      <option value="">All Time</option>
+      {% for m in available_months %}
+      <option value="{{ m }}" {{ 'selected' if m == month_filter else '' }}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- ── Charts Row ── -->
+  <div class="grid grid-2" style="margin-bottom:24px">
+    <div class="card">
+      <h2>Spending by Category</h2>
+      <div class="chart-wrap"><canvas id="catPie"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Monthly Trend</h2>
+      <div class="chart-wrap"><canvas id="monthBar"></canvas></div>
+    </div>
+  </div>
+
+  <!-- ── Category Breakdown ── -->
+  {% if categories %}
+  <div class="card" style="margin-bottom:24px">
+    <h2>Category Breakdown</h2>
+    <table>
+      <thead><tr><th>Category</th><th>Amount</th><th>Count</th><th>% of Total</th></tr></thead>
+      <tbody>
+        {% for i in range(categories|length) %}
+        <tr>
+          <td><span class="cat-badge">{{ categories[i] }}</span></td>
+          <td class="amount">${{ "%.2f"|format(cat_amounts[i]) }}</td>
+          <td>{{ cat_counts[i] }}</td>
+          <td>{{ "%.1f"|format(cat_amounts[i] / total * 100 if total > 0 else 0) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <!-- ── Quick Add ── -->
+  <div class="card" style="margin-bottom:24px">
+    <h2>Quick Add Expense</h2>
+    <form method="POST" action="/add">
+      <div class="add-row">
+        <div class="field">
+          <label>Amount</label>
+          <input type="number" name="amount" step="0.01" min="0" placeholder="0.00" required style="width:100px">
+        </div>
+        <div class="field">
+          <label>Description</label>
+          <input type="text" name="description" placeholder="Coffee at Starbucks" required style="width:220px">
+        </div>
+        <div class="field">
+          <label>Category (auto if blank)</label>
+          <select name="category" style="width:160px">
+            <option value="">Auto-detect</option>
+            {% for cat in categories %}
+            <option>{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Date</label>
+          <input type="date" name="date" style="width:150px">
+        </div>
+        <button type="submit" class="btn btn-primary">Add</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- ── Recent Expenses ── -->
+  <div class="card">
+    <h2>Recent Expenses</h2>
+    {% if expenses %}
+    <table>
+      <thead><tr><th>ID</th><th>Date</th><th>Description</th><th>Category</th><th>Amount</th><th></th></tr></thead>
+      <tbody>
+        {% for e in expenses %}
+        <tr>
+          <td>#{{ e[0] }}</td>
+          <td>{{ e[4] }}</td>
+          <td>{{ e[2] }}</td>
+          <td><span class="cat-badge">{{ e[3] }}</span></td>
+          <td class="amount">${{ "%.2f"|format(e[1]) }}</td>
+          <td>
+            <form method="POST" action="/delete/{{ e[0] }}" style="display:inline" onsubmit="return confirm('Delete #{{ e[0] }}?')">
+              <button type="submit" class="btn btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--muted);text-align:center;padding:40px 0">No expenses yet. Upload a receipt or add one manually.</p>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+const COLORS = [
+  '#38bdf8','#4ade80','#facc15','#f87171','#a78bfa',
+  '#fb923c','#2dd4bf','#f472b6','#818cf8','#34d399'
+];
+
+// Category Doughnut Chart
+new Chart(document.getElementById('catPie'), {
+  type: 'doughnut',
+  data: {
+    labels: {{ categories|tojson }},
+    datasets: [{
+      data: {{ cat_amounts|tojson }},
+      backgroundColor: COLORS.slice(0, {{ categories|length }}),
+      borderWidth: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: {
+      legend: { position: 'right', labels: { color: '#94a3b8', padding: 12, font: { size: 12 } } }
+    }
+  }
+});
+
+// Monthly Bar Chart
+new Chart(document.getElementById('monthBar'), {
+  type: 'bar',
+  data: {
+    labels: {{ months|tojson }},
+    datasets: [{
+      label: 'Spending',
+      data: {{ month_totals|tojson }},
+      backgroundColor: '#38bdf8',
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+      y: { ticks: { color: '#94a3b8', callback: v => '$'+v }, grid: { color: 'rgba(255,255,255,0.05)' } }
+    }
+  }
+});
+</script>
+
+</body>
+</html>

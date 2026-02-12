@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Upload Receipt - Expense Tracker</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+    --text: #f1f5f9; --muted: #94a3b8; --accent: #38bdf8;
+    --green: #4ade80; --red: #f87171;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  nav { background: var(--surface); border-bottom: 1px solid var(--surface2); padding: 16px 32px; display: flex; align-items: center; gap: 24px; }
+  nav h1 { font-size: 1.3rem; font-weight: 700; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 0.95rem; transition: color 0.2s; }
+  nav a:hover, nav a.active { color: var(--accent); }
+
+  .container { max-width: 720px; margin: 0 auto; padding: 40px 24px; }
+  .card { background: var(--surface); border-radius: var(--radius); padding: 32px; border: 1px solid var(--surface2); }
+  .card h2 { font-size: 1.2rem; margin-bottom: 8px; }
+  .card p { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+
+  .flash { padding: 12px 20px; border-radius: 8px; margin-bottom: 16px; font-size: 0.9rem; }
+  .flash-success { background: rgba(74,222,128,0.15); border: 1px solid var(--green); color: var(--green); }
+  .flash-error { background: rgba(248,113,113,0.15); border: 1px solid var(--red); color: var(--red); }
+
+  /* ── Drop Zone ── */
+  .dropzone {
+    border: 2px dashed var(--surface2); border-radius: var(--radius);
+    padding: 48px 24px; text-align: center; cursor: pointer;
+    transition: all 0.3s; margin-bottom: 24px;
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--accent); background: rgba(56,189,248,0.05);
+  }
+  .dropzone svg { margin-bottom: 12px; }
+  .dropzone .main-text { font-size: 1rem; font-weight: 500; }
+  .dropzone .sub-text { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+  .dropzone .file-name { color: var(--green); font-weight: 600; margin-top: 10px; }
+
+  /* ── Preview ── */
+  .preview-wrap { text-align: center; margin-bottom: 24px; display: none; }
+  .preview-wrap img { max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid var(--surface2); }
+
+  /* ── Form fields ── */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+  .field label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .field select, .field input {
+    width: 100%; background: var(--surface2); color: var(--text); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; padding: 10px 14px; font-size: 0.9rem; outline: none;
+  }
+  .field select:focus, .field input:focus { border-color: var(--accent); }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 28px; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: 600; transition: all 0.2s; width: 100%; }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .spinner { display: none; margin: 16px auto; }
+  .spinner.active { display: block; }
+  .spinner svg { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<nav>
+  <h1>Expense Tracker</h1>
+  <a href="/">Dashboard</a>
+  <a href="/upload" class="active">Upload Receipt</a>
+</nav>
+
+<div class="container">
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for cat, msg in messages %}
+    <div class="flash flash-{{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  <div class="card">
+    <h2>Scan a Receipt</h2>
+    <p>Upload a photo of your receipt or bill. Claude Vision will extract the vendor, amount, date, and categorize it automatically.</p>
+
+    <form id="uploadForm" method="POST" action="/upload" enctype="multipart/form-data">
+
+      <!-- Drop Zone -->
+      <div class="dropzone" id="dropzone">
+        <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+        </svg>
+        <div class="main-text">Drop receipt image here or click to browse</div>
+        <div class="sub-text">Supports JPG, PNG, GIF, WebP, BMP</div>
+        <div class="file-name" id="fileName"></div>
+        <input type="file" name="receipt" id="fileInput" accept="image/*" hidden>
+      </div>
+
+      <!-- Image Preview -->
+      <div class="preview-wrap" id="previewWrap">
+        <img id="previewImg" src="" alt="Receipt preview">
+      </div>
+
+      <!-- Optional Overrides -->
+      <div class="form-grid">
+        <div class="field">
+          <label>Category Override (optional)</label>
+          <select name="category">
+            <option value="">Auto-detect from receipt</option>
+            {% for cat in categories %}
+            <option value="{{ cat }}">{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Date Override (optional)</label>
+          <input type="date" name="date">
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" id="submitBtn" disabled>
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+        </svg>
+        Scan &amp; Add Expense
+      </button>
+
+      <div class="spinner" id="spinner">
+        <svg width="32" height="32" fill="none" stroke="var(--accent)" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83"/>
+        </svg>
+        <p style="color:var(--muted);font-size:0.85rem;margin-top:8px">Scanning receipt with Claude Vision...</p>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileName = document.getElementById('fileName');
+const previewWrap = document.getElementById('previewWrap');
+const previewImg = document.getElementById('previewImg');
+const submitBtn = document.getElementById('submitBtn');
+const spinner = document.getElementById('spinner');
+const form = document.getElementById('uploadForm');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    fileInput.files = e.dataTransfer.files;
+    showFile(e.dataTransfer.files[0]);
+  }
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) showFile(fileInput.files[0]);
+});
+
+function showFile(file) {
+  fileName.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+  submitBtn.disabled = false;
+  const reader = new FileReader();
+  reader.onload = e => { previewImg.src = e.target.result; previewWrap.style.display = 'block'; };
+  reader.readAsDataURL(file);
+}
+
+form.addEventListener('submit', () => {
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Scanning...';
+  spinner.classList.add('active');
+});
+</script>
+
+</body>
+</html>
