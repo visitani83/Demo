@@ -2,7 +2,10 @@
 """Simple expense tracking agent with auto-categorization."""
 
 import sqlite3
+import base64
+import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 
@@ -82,6 +85,89 @@ def auto_categorize(description):
             if keyword in desc_lower:
                 return category
     return "Other"
+
+
+def _image_to_base64(image_path):
+    """Read an image file and return its base64 encoding and media type."""
+    ext = os.path.splitext(image_path)[1].lower()
+    media_types = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".gif": "image/gif",
+        ".webp": "image/webp", ".bmp": "image/bmp",
+    }
+    media_type = media_types.get(ext, "image/jpeg")
+    with open(image_path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("utf-8")
+    return data, media_type
+
+
+def scan_receipt(image_path):
+    """Extract expense details from a receipt image using Claude Vision API."""
+    if not os.path.isfile(image_path):
+        return None, f"File not found: {image_path}"
+
+    try:
+        import anthropic
+    except ImportError:
+        return None, "Missing dependency. Install with: pip install anthropic"
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None, (
+            "ANTHROPIC_API_KEY not set.\n"
+            "  Export it first: export ANTHROPIC_API_KEY=your-key-here"
+        )
+
+    try:
+        img_data, media_type = _image_to_base64(image_path)
+    except Exception as e:
+        return None, f"Cannot read image: {e}"
+
+    categories_list = ", ".join(sorted(CATEGORY_KEYWORDS.keys())) + ", Other"
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=512,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": img_data},
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Extract expense details from this receipt/bill image. "
+                            "Return ONLY valid JSON with these fields:\n"
+                            '  "amount": <number, the total/grand total amount>,\n'
+                            '  "description": "<vendor or short description of purchase>",\n'
+                            f'  "category": "<one of: {categories_list}>",\n'
+                            '  "date": "<YYYY-MM-DD if visible, else null>",\n'
+                            '  "items": ["<list of line items if visible>"]\n'
+                            "If you cannot extract a field, use null. Return ONLY the JSON object."
+                        ),
+                    },
+                ],
+            }],
+        )
+    except Exception as e:
+        return None, f"API call failed: {e}"
+
+    raw = response.content[0].text.strip()
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, f"Could not parse API response:\n{raw}"
+
+    return result, None
 
 
 def add_expense(conn, amount, description, category=None, date=None):
@@ -321,6 +407,66 @@ def cmd_delete(conn, args):
         print(f"  Expense #{expense_id} not found.")
 
 
+def cmd_scan(conn, args):
+    """Handle the 'scan' command — extract expense from a receipt image."""
+    if not args:
+        print("Usage: scan <image_path> [--category CATEGORY] [--date YYYY-MM-DD]")
+        return
+
+    image_path = args[0]
+    override_category = None
+    override_date = None
+
+    i = 1
+    while i < len(args):
+        if args[i] == "--category" and i + 1 < len(args):
+            override_category = args[i + 1]
+            i += 2
+        elif args[i] == "--date" and i + 1 < len(args):
+            override_date = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    print(f"  Scanning receipt: {image_path} ...")
+    result, error = scan_receipt(image_path)
+
+    if error:
+        print(f"  Error: {error}")
+        return
+
+    amount = result.get("amount")
+    description = result.get("description") or "Receipt purchase"
+    category = override_category or result.get("category") or auto_categorize(description)
+    date = override_date or result.get("date")
+    items = result.get("items") or []
+
+    if amount is None:
+        print("  Could not extract an amount from the receipt.")
+        print("  Use: add <amount> <description> to enter manually.")
+        return
+
+    # Show extracted info
+    print(f"\n  Extracted from receipt:")
+    print(f"    Vendor:   {description}")
+    print(f"    Amount:   ${amount:.2f}")
+    print(f"    Category: {category}")
+    print(f"    Date:     {date or 'not detected (using today)'}")
+    if items:
+        print(f"    Items:")
+        for item in items[:10]:
+            print(f"      - {item}")
+
+    expense_id, assigned_category = add_expense(conn, amount, description, category, date)
+    date_display = date or datetime.now().strftime("%Y-%m-%d")
+
+    print(f"\n  Added expense #{expense_id}:")
+    print(f"    Amount:   ${amount:.2f}")
+    print(f"    Desc:     {description}")
+    print(f"    Category: {assigned_category}")
+    print(f"    Date:     {date_display}")
+
+
 def cmd_categories(conn, _args):
     """Handle the 'categories' command."""
     print("\n  Built-in categories:")
@@ -357,6 +503,10 @@ def cmd_help(_conn, _args):
     search <query>
         Search expenses by description.
 
+    scan <image_path> [--category CAT] [--date YYYY-MM-DD]
+        Scan a receipt/bill image and auto-extract expense details.
+        Uses Claude Vision API (requires ANTHROPIC_API_KEY env var).
+
     delete <id>
         Delete an expense by its ID.
 
@@ -373,6 +523,8 @@ def cmd_help(_conn, _args):
     add 12.50 Coffee at Starbucks
     add 45.00 Uber ride to airport --category Transport
     add 120 Monthly gym membership --date 2025-01-15
+    scan receipt.jpg
+    scan bills/electricity.png --category "Bills & Utilities"
     summary 2025-01
     search grocery
 """)
@@ -390,6 +542,8 @@ COMMANDS = {
     "rm": cmd_delete,
     "categories": cmd_categories,
     "cats": cmd_categories,
+    "scan": cmd_scan,
+    "receipt": cmd_scan,
     "help": cmd_help,
 }
 
